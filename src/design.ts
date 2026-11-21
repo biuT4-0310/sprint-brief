@@ -1,4 +1,4 @@
-import type { SlideKind } from './deck.ts'
+import type { Field, SlideKind } from './deck.ts'
 
 export const COLORS = {
   paper: 'FFFCF4',
@@ -14,7 +14,7 @@ export const COLORS = {
   summary: 'DDEACF',
   progress: 'D4EAE4',
   risks: 'F7E4C0',
-  decisions: 'E3E4F5',
+  decisions: 'CBE2D4',
 } as const
 
 export const ACCENT: Record<Exclude<SlideKind, 'cover'>, string> = {
@@ -25,7 +25,28 @@ export const ACCENT: Record<Exclude<SlideKind, 'cover'>, string> = {
 }
 
 export const COVER_MARKS = [
-  { index: '01', label: '进展', color: COLORS.mint },
-  { index: '02', label: '风险', color: 'F2D395' },
-  { index: '03', label: '决策', color: 'CFD8FA' },
+  { index: '01', label: '本周完成', color: COLORS.mint },
+  { index: '02', label: '发版风险', color: 'F2D395' },
+  { index: '03', label: '会上要定', color: 'C4DFD3' },
 ]
+
+export const WIDTH = 40 / 3
+export const HEIGHT = 7.5
+
+export type FieldLayout = { x: number; y: number; w: number; h: number; tone?: 'forest' | 'amber'; emphasis?: boolean }
+
+export const FIELD_LAYOUT: Record<Field, FieldLayout> = {
+  issue: { x: .85, y: 2.42, w: 6.05, h: 3.71, tone: 'amber', emphasis: true },
+  impact: { x: 7.08, y: 2.42, w: 5.4, h: 1.76 },
+  next: { x: 7.08, y: 4.36, w: 5.4, h: 1.77 },
+  decision: { x: .85, y: 2.32, w: 11.63, h: 1.55, tone: 'forest', emphasis: true },
+  owner: { x: .85, y: 4.04, w: 5.74, h: .94 },
+  deadline: { x: 6.74, y: 4.04, w: 5.74, h: .94 },
+  basis: { x: .85, y: 5.16, w: 11.63, h: 1.07 },
+}
+
+export function fieldSurface(layout: FieldLayout) {
+  if (layout.tone === 'forest') return { fill: COLORS.forest, text: COLORS.paper, label: COLORS.mint, border: COLORS.forest }
+  if (layout.tone === 'amber') return { fill: 'F7ECD1', text: COLORS.ink, label: '755019', border: 'E6D5AD' }
+  return { fill: COLORS.white, text: COLORS.ink, label: COLORS.muted, border: COLORS.line }
+}

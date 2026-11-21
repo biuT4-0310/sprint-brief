@@ -1,94 +1,117 @@
-import { ArrowDownToLine, ArrowRight, Braces, CircleHelp, FileText, Layers3, LoaderCircle, NotebookPen, Plus, Sparkles } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, Layers3, LoaderCircle, NotebookPen, Plus } from 'lucide-react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
 import { connectAnna, generateDeck, generationError, inAnnaWindow } from './anna.ts'
 import type { AnnaRuntime } from './anna.ts'
-import { EMPTY_INPUT, LIMITS, sameInput, splitSources } from './deck.ts'
-import type { BriefInput, Deck, Slide } from './deck.ts'
+import { EMPTY_INPUT, LIMITS, claimAt, emptyClaim, reviewSummary, sameInput, splitSources, statusOf, updateClaim } from './deck.ts'
+import type { BriefInput, Claim, Slide, Where } from './deck.ts'
+import { annaDraftStore, browserDraftStore } from './drafts.ts'
+import type { DraftStore } from './drafts.ts'
 import { EXAMPLE_INPUT, exampleDeck } from './example.ts'
 import { Inspector } from './Inspector.tsx'
 import type { InspectorTab } from './Inspector.tsx'
 import { Preview } from './Preview.tsx'
+import { useWorkspace } from './useWorkspace.ts'
 
 type Connection = 'connecting' | 'ready' | 'offline' | 'error'
+type DialogMode = 'new' | 'example' | 'generate' | 'export'
+
+const SAVE_LABELS = {
+  idle: '', restored: '已恢复上次草稿', saving: '保存中…', saved: '已保存',
+  failed: '草稿保存失败', unavailable: '草稿未保存',
+  conflict: '另一个窗口更新了草稿。当前内容可以先导出。',
+}
 
 export function App() {
-  const [input, setInput] = useState<BriefInput>({ ...EXAMPLE_INPUT })
-  const [deck, setDeck] = useState<Deck | null>(exampleDeck)
-  const [page, setPage] = useState(0)
-  const [tab, setTab] = useState<InspectorTab>('sources')
-  const [activeSource, setActiveSource] = useState<string | null>(null)
   const [connection, setConnection] = useState<Connection>(() => inAnnaWindow() ? 'connecting' : 'offline')
   const runtime = useRef<AnnaRuntime | null>(null)
+  const [store, setStore] = useState<DraftStore | null>()
+  const { workspace, write, ready, status, retry } = useWorkspace(store)
+  const { input, deck, edited } = workspace
+  const [page, setPage] = useState(0)
+  const [tab, setTab] = useState<InspectorTab>('sources')
+  const [selected, setSelected] = useState<Where>('title')
   const [generating, setGenerating] = useState(false)
   const [exporting, setExporting] = useState(false)
   const [generationMessage, setGenerationMessage] = useState('')
   const [exportMessage, setExportMessage] = useState('')
-  const resetDialog = useRef<HTMLDialogElement>(null)
+  const [includeSources, setIncludeSources] = useState(true)
+  const dialog = useRef<HTMLDialogElement>(null)
   const projectInput = useRef<HTMLInputElement>(null)
-  const [resetMode, setResetMode] = useState<'new' | 'example'>('new')
-  const [edited, setEdited] = useState(false)
-  const [regenerate, setRegenerate] = useState(false)
+  const [dialogMode, setDialogMode] = useState<DialogMode>('new')
 
   useEffect(() => {
-    if (!inAnnaWindow()) return
-    let cancelled = false
+    if (!inAnnaWindow()) {
+      try { setStore(browserDraftStore(window.localStorage)) } catch { setStore(null) }
+      return
+    }
+    let active = true
     connectAnna().then(value => {
-      if (cancelled) return
+      if (!active) return
       runtime.current = value
+      setStore(annaDraftStore(value.storage))
       setConnection('ready')
     }).catch(() => {
-      if (!cancelled) setConnection('error')
+      if (!active) return
+      setStore(null)
+      setConnection('error')
     })
-    return () => { cancelled = true }
+    return () => { active = false }
   }, [])
 
   const sources = useMemo(() => deck?.sources ?? splitSources(input.notes), [deck, input.notes])
+  const slide = deck?.slides[page]
+  const counts = reviewSummary(deck?.slides ?? [])
   const inputChanged = Boolean(deck && !sameInput(deck.input, input))
-  const canGenerate = Boolean(input.project.trim() && input.notes.trim() && connection === 'ready')
-  const canExport = Boolean(deck?.slides.every(slide => slide.title.trim() && slide.points.every(point => point.text.trim())))
+  const blocked = !ready || generating
+  const canGenerate = Boolean(!blocked && input.project.trim() && input.notes.trim() && connection === 'ready')
 
   function changeInput(key: keyof BriefInput, text: string) {
-    setInput(current => ({ ...current, [key]: text }))
+    write(current => ({ ...current, input: { ...current.input, [key]: text } }))
     setGenerationMessage('')
   }
 
-  function setWorkspace(next: Deck | null) {
-    setDeck(next)
-    setPage(0)
-    setTab('sources')
-    setActiveSource(null)
-    setEdited(false)
-    setGenerationMessage('')
-    setExportMessage('')
+  function selectPage(index: number, where: Where = 'title') {
+    setPage(index)
+    setSelected(where)
+    setTab(index ? 'edit' : 'sources')
+  }
+
+  function selectClaim(where: Where, fromPreview = false) {
+    setSelected(where)
+    setTab('edit')
+    if (fromPreview && window.matchMedia('(max-width: 770px)').matches) {
+      document.getElementById('inspector-title')?.scrollIntoView({ block: 'start' })
+    }
   }
 
   function reset(mode: 'new' | 'example') {
-    setRegenerate(false)
-    setInput(mode === 'example' ? { ...EXAMPLE_INPUT } : { ...EMPTY_INPUT })
-    setWorkspace(mode === 'example' ? exampleDeck() : null)
-    if (mode === 'new') projectInput.current?.focus()
+    write(mode === 'example' ? { input: { ...EXAMPLE_INPUT }, deck: exampleDeck(), edited: false } : { input: { ...EMPTY_INPUT }, deck: null, edited: false })
+    selectPage(0)
+    setGenerationMessage('')
+    setExportMessage('')
+    if (mode === 'new') window.requestAnimationFrame(() => projectInput.current?.focus())
+  }
+
+  function show(mode: DialogMode) {
+    setDialogMode(mode)
+    dialog.current?.showModal()
   }
 
   function requestReset(mode: 'new' | 'example') {
-    if (edited || inputChanged || deck?.origin === 'anna' || (!deck && input.notes.trim())) {
-      setResetMode(mode)
-      resetDialog.current?.showModal()
-      return
-    }
-    reset(mode)
+    if (edited || inputChanged || deck?.origin === 'anna' || (!deck && (input.project || input.period || input.notes))) show(mode)
+    else reset(mode)
   }
 
   async function runGeneration() {
-    if (!runtime.current || generating) return
+    if (!runtime.current || !canGenerate) return
     setGenerating(true)
     setGenerationMessage('')
     setExportMessage('')
     try {
       const generated = await generateDeck(runtime.current, input)
-      setWorkspace(generated)
-      setPage(1)
-      setTab('edit')
+      write({ input, deck: generated, edited: false })
+      selectPage(1)
     } catch (error) {
       setGenerationMessage(generationError(error))
     } finally {
@@ -98,66 +121,69 @@ export function App() {
 
   function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault()
-    if (edited) {
-      setRegenerate(true)
-      resetDialog.current?.showModal()
-      return
-    }
-    void runGeneration()
+    if (edited) show('generate')
+    else void runGeneration()
   }
 
-  async function save() {
-    if (!deck || !canExport || exporting) return
+  async function savePptx() {
+    if (!deck || exporting) return
     setExporting(true)
     setExportMessage('')
     try {
       const { downloadDeck } = await import('./export.ts')
-      await downloadDeck(deck)
-      setExportMessage('PPTX 已生成。请查看浏览器下载记录。')
+      await downloadDeck(deck, includeSources)
+      setExportMessage('已生成 PPTX。请查看浏览器下载记录。')
     } catch {
-      setExportMessage('导出失败，请重试。当前草稿已保留。')
+      setExportMessage('导出失败，草稿已保留。可以再试一次。')
     } finally {
       setExporting(false)
     }
   }
 
-  function selectPage(index: number) {
-    setPage(index)
-    setActiveSource(null)
-    setTab(index ? 'edit' : 'sources')
-  }
-
-  function selectSource(id: string) {
-    setActiveSource(id)
-    setTab('sources')
-  }
-
-  function editSlide(update: (slide: Slide) => Slide) {
-    setDeck(current => current && {
+  function editSlide(update: (value: Slide) => Slide) {
+    if (blocked) return
+    write(current => current.deck ? {
       ...current,
-      slides: current.slides.map((slide, index) => index === page ? update(slide) : slide),
-    })
-    setEdited(true)
+      edited: true,
+      deck: { ...current.deck, slides: current.deck.slides.map((value, index) => index === page ? update(value) : value) },
+    } : current)
     setExportMessage('')
   }
 
-  const connectionLabel = { connecting: '正在连接 Anna', ready: 'Anna 已连接', offline: '本地预览', error: 'Anna 连接失败' }[connection]
-  const dialogTitle = regenerate ? '生成新的草稿？' : resetMode === 'new' ? '新建汇报？' : '载入示例？'
+  function editClaim(update: (value: Claim) => Claim) {
+    editSlide(value => selected === 'title'
+      ? { ...value, title: update(value.title) }
+      : { ...value, points: value.points.map((point, index) => index === selected ? { ...point, ...update(point) } : point) })
+  }
+
+  function pendingClaim() {
+    if (!deck) return
+    for (const [index, value] of deck.slides.entries()) {
+      if (index === 0) continue
+      if (statusOf(value.title) === '待核实') { selectPage(index); return }
+      const point = value.points.findIndex(item => statusOf(item) === '待核实')
+      if (point >= 0) { selectPage(index, point); return }
+    }
+  }
+
+  const connectionLabel = { connecting: '连接 Anna…', ready: 'Anna 已连接', offline: '本地预览', error: 'Anna 未连接' }[connection]
+  const dialogTitle = { new: '新建汇报？', example: '换成示例？', generate: '重新生成？', export: '导出 PPTX' }[dialogMode]
+  const currentClaim = slide && claimAt(slide, selected)
+  const usage = deck?.usage
 
   return (
     <div className="app-shell">
       <header className="app-header">
         <div className="brand">
           <span className="brand-icon"><Layers3 size={21} strokeWidth={2.1} /></span>
-          <span><strong>进展成页</strong><span className="brand-en">SPRINT BRIEF</span></span>
+          <strong>进展成页</strong>
         </div>
         <div className="header-actions">
           <span className={`connection ${connection}`}><i />{connectionLabel}</span>
-          <button type="button" className="button secondary" aria-label="新建汇报" onClick={() => requestReset('new')} disabled={generating}><Plus size={17} />新建<span className="hide-small">汇报</span></button>
-          <button type="button" className="button primary export-button" onClick={save} disabled={!canExport || exporting}
-            title={deck && !canExport ? '请补全空白的标题或要点。' : undefined}>
+          <button type="button" className="button secondary" aria-label="新建汇报" onClick={() => requestReset('new')} disabled={blocked}><Plus size={17} />新建</button>
+          <button type="button" className="button primary export-button" disabled={!deck || !ready || exporting} onClick={() => show('export')}>
             {exporting ? <LoaderCircle className="spin" size={17} /> : <ArrowDownToLine size={17} />}
-            {exporting ? '正在导出' : '导出 PPTX'}
+            {exporting ? '导出中…' : '导出 PPTX'}
           </button>
         </div>
       </header>
@@ -165,78 +191,105 @@ export function App() {
       <main className="main">
         <div className="intro">
           <div>
-            <h1>研发汇报工作台</h1>
-            <p>把零散笔记整理成能核对原文的项目汇报。</p>
+            <h1>研发周报</h1>
+            <p>从研发笔记整理汇报。点一下页里的文字，就能回看原文。</p>
           </div>
-          {deck && (
-            <div className="draft-meta">
-              <span className={deck.origin === 'example' ? 'draft-tag sample' : 'draft-tag'}>{deck.origin === 'example' ? <Braces size={14} /> : <Sparkles size={14} />}{deck.origin === 'example' ? '示例草稿' : 'Anna 生成'}</span>
-              {deck.origin === 'anna' && deck.usage?.cu !== undefined && <span>本次 {deck.usage.cu.toLocaleString('zh-CN', { maximumFractionDigits: 3 })} CU</span>}
-            </div>
-          )}
+          <div className="draft-meta" aria-live="polite">
+            {deck?.origin === 'example' && <span className="draft-tag">示例</span>}
+            {usage?.model === 'mock' && <span className="draft-tag">本地模拟</span>}
+            {usage && usage.model !== 'mock' && (
+              <span>{[
+                usage.elapsedMs !== undefined && `${(usage.elapsedMs / 1000).toFixed(1)} 秒`,
+                usage.cu !== undefined && `${usage.cu.toLocaleString('zh-CN', { maximumFractionDigits: 3 })} CU`,
+              ].filter(Boolean).join(' · ')}</span>
+            )}
+            {!!counts.pending && <button className="pending-link" type="button" onClick={pendingClaim}>{counts.pending} 处待核实</button>}
+            {SAVE_LABELS[status] && <span className="save-status">{SAVE_LABELS[status]}</span>}
+            {status === 'failed' && <button className="text-button" type="button" onClick={retry}>重试保存</button>}
+          </div>
         </div>
-
         {exportMessage && <div className="export-feedback" role="status">{exportMessage}</div>}
 
         <div className="workspace">
           <section className="panel material-panel" aria-labelledby="material-title">
             <div className="panel-header">
-              <div className="panel-title"><NotebookPen size={18} /><h2 id="material-title">汇报素材</h2></div>
-              <button className="text-button" type="button" onClick={() => requestReset('example')} disabled={generating}>载入示例</button>
+              <div className="panel-title"><NotebookPen size={17} /><h2 id="material-title">汇报素材</h2></div>
+              <button className="text-button" type="button" onClick={() => requestReset('example')} disabled={blocked}>载入示例</button>
             </div>
 
             <form className="material-form" onSubmit={submit}>
               <div className="form-field">
                 <label className="field-label" htmlFor="project-name">项目名称</label>
-                <input ref={projectInput} id="project-name" required maxLength={LIMITS.project} value={input.project} onChange={event => changeInput('project', event.target.value)} disabled={generating} placeholder="例如：订单台 2.0" />
+                <input ref={projectInput} id="project-name" required maxLength={LIMITS.project} value={input.project} onChange={event => changeInput('project', event.target.value)} disabled={blocked} placeholder="例如：订单台 2.0" />
               </div>
               <div className="form-field">
-                <label className="field-label" htmlFor="report-period">汇报周期<span>选填</span></label>
-                <input id="report-period" maxLength={LIMITS.period} value={input.period} onChange={event => changeInput('period', event.target.value)} disabled={generating} placeholder="例如：11 月 16 日 — 11 月 20 日" />
+                <label className="field-label" htmlFor="report-period">汇报周期 <span>选填</span></label>
+                <input id="report-period" maxLength={LIMITS.period} value={input.period} onChange={event => changeInput('period', event.target.value)} disabled={blocked} placeholder="例如：11 月 16 日到 11 月 20 日" />
               </div>
               <div className="form-field notes-field">
                 <label className="field-label" htmlFor="raw-notes">研发笔记</label>
-                <textarea id="raw-notes" required maxLength={LIMITS.notes} value={input.notes} onChange={event => changeInput('notes', event.target.value)} disabled={generating} placeholder="粘贴任务列表或会议纪要。每行写一条，方便回查原文。" rows={8} />
+                <textarea id="raw-notes" required maxLength={LIMITS.notes} value={input.notes} onChange={event => changeInput('notes', event.target.value)} disabled={blocked} placeholder="粘贴周报、任务记录或会议纪要。每行一条，方便回查。" rows={8} />
                 <span className="char-count">{input.notes.length.toLocaleString('zh-CN')} / 5,200</span>
               </div>
-              {inputChanged && <p className="material-message"><FileText size={14} />素材已变更。草稿仍引用上次生成时的原文。</p>}
+              {inputChanged && <p className="material-message">素材改过了，当前草稿仍引用上次的笔记。</p>}
               {generationMessage && <p className="error-message" role="alert">{generationMessage}</p>}
-              <button className="button primary generate-button" type="submit" disabled={!canGenerate || generating}>
-                {generating ? <LoaderCircle className="spin" size={17} /> : <Sparkles size={17} />}
-                <span>{generating ? 'Anna 正在整理汇报…' : '用 Anna 生成'}</span>
+              <button className="button primary generate-button" type="submit" disabled={!canGenerate}>
+                {generating && <LoaderCircle className="spin" size={16} />}
+                <span>{generating ? '正在整理…' : '生成草稿'}</span>
                 {!generating && <ArrowRight className="button-arrow" size={16} />}
               </button>
-              <p className="generation-hint" aria-live="polite">
-                <CircleHelp size={14} />
-                {connection === 'offline' ? '从 Anna 平台打开即可使用 AI 生成。' :
-                 connection === 'error' ? '请重新打开 Anna 应用窗口恢复连接。' :
-                 connection === 'connecting' ? '正在连接 Anna 平台。' :
-                 '生成会消耗 Anna 额度，浏览和编辑无需调用。'}
+              <p className="generation-hint">
+                {connection === 'offline' ? '从 Anna 打开后可生成。' :
+                 connection === 'error' ? '请重新打开应用连接 Anna。' :
+                 connection === 'connecting' || !ready ? '正在打开草稿。' :
+                 '用 Anna 生成会消耗额度。'}
               </p>
+              {!!deck?.incomplete && !!counts.missing && <p className="material-message">有页面没生成完整，缺项可以手动补。</p>}
             </form>
           </section>
 
-          <Preview deck={deck} page={page} onPage={selectPage} onSource={selectSource} />
-          <Inspector deck={deck} page={page} sources={sources} activeSource={activeSource} tab={tab}
-            onTab={next => { setActiveSource(null); setTab(next) }} onSource={selectSource}
-            onTitle={title => editSlide(slide => ({ ...slide, title }))}
-            onPoint={(index, text) => editSlide(slide => ({
-              ...slide,
-              points: slide.points.map((point, pointIndex) => pointIndex === index ? { ...point, text, edited: true } : point),
-            }))}
-            onDelete={index => editSlide(slide => ({ ...slide, points: slide.points.filter((_, pointIndex) => pointIndex !== index) }))}
+          <Preview deck={deck} page={page} selected={tab === 'edit' ? selected : null} onPage={selectPage} onClaim={where => selectClaim(where, true)} />
+          <Inspector slide={slide} sources={sources} selected={selected} tab={tab} disabled={blocked}
+            onTab={setTab} onSelect={selectClaim}
+            onText={text => { if (currentClaim?.text !== text) editClaim(claim => updateClaim(claim, { text })) }}
+            onSources={sourceIds => editClaim(claim => updateClaim(claim, { sourceIds }))}
+            onCheck={checked => editClaim(claim => ({ ...claim, checked }))}
+            onDelete={() => {
+              editSlide(value => ({ ...value, points: value.points.filter((_, index) => index !== selected) }))
+              setSelected('title')
+            }}
+            onAdd={() => {
+              if (!slide) return
+              editSlide(value => ({ ...value, points: [...value.points, emptyClaim()] }))
+              setSelected(slide.points.length)
+            }}
           />
         </div>
       </main>
 
-      <dialog ref={resetDialog} onClose={() => setRegenerate(false)}>
+      <dialog ref={dialog} aria-labelledby="dialog-title">
         <form method="dialog" className="confirm-dialog">
-          <h2>{dialogTitle}</h2>
-          <p>当前草稿和改动将被替换。</p>
+          <h2 id="dialog-title">{dialogTitle}</h2>
+          {dialogMode === 'export' ? (
+            <>
+              {(counts.pending || counts.missing || counts.linked) ? (
+                <p>{[
+                  counts.pending && `${counts.pending} 处待核实`,
+                  counts.missing && `${counts.missing} 处待补充`,
+                  counts.linked && `${counts.linked} 处已关联原文、未人工核对`,
+                ].filter(Boolean).join('，')}。</p>
+              ) : <p>标题和要点可以在 PowerPoint 中继续编辑。</p>}
+              <label className="export-option"><input type="checkbox" checked={includeSources} onChange={event => setIncludeSources(event.target.checked)} />在演讲者备注中附原文</label>
+            </>
+          ) : <p>{dialogMode === 'generate' ? '新草稿生成后会替换这份草稿和核对记录。' : '当前草稿会被替换。'}</p>}
           <div>
-            <button className="button secondary" type="submit" autoFocus>取消</button>
-            <button className="button primary" type="submit" onClick={() => { if (regenerate) void runGeneration(); else reset(resetMode) }}>
-              {regenerate ? '重新生成' : resetMode === 'new' ? '新建汇报' : '载入示例'}
+            <button className="button secondary" type="submit" autoFocus>{dialogMode === 'export' ? '返回' : '取消'}</button>
+            <button className="button primary" type="submit" onClick={() => {
+              if (dialogMode === 'export') void savePptx()
+              else if (dialogMode === 'generate') void runGeneration()
+              else reset(dialogMode)
+            }}>
+              {{ export: '下载 PPTX', generate: '重新生成', new: '新建汇报', example: '载入示例' }[dialogMode]}
             </button>
           </div>
         </form>

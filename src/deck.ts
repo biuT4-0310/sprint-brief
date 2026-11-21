@@ -1,26 +1,47 @@
 export const LIMITS = { project: 28, period: 24, notes: 5200, title: 36, point: 72, points: 3 } as const
 
+export const FIELDS = {
+  issue: { label: '已知现象', limit: 72 },
+  impact: { label: '影响范围', limit: 60 },
+  next: { label: '下一步验证', limit: 60 },
+  decision: { label: '做什么决定', limit: 65 },
+  owner: { label: '谁来决定', limit: 24 },
+  deadline: { label: '何时决定', limit: 24 },
+  basis: { label: '决策依据', limit: 65 },
+} as const
+
+export type Field = keyof typeof FIELDS
+
 export const SLIDES = [
-  { key: 'cover', title: '封面', eyebrow: 'PROJECT BRIEF' },
-  { key: 'summary', title: '本周摘要', eyebrow: 'EXECUTIVE SUMMARY' },
-  { key: 'progress', title: '已完成事项', eyebrow: 'DELIVERED' },
-  { key: 'risks', title: '风险与阻塞', eyebrow: 'RISKS & BLOCKERS' },
-  { key: 'decisions', title: '下一步与待决策', eyebrow: 'NEXT STEPS' },
-] as const
+  { key: 'cover', title: '封面', fields: [] },
+  { key: 'summary', title: '本周摘要', fields: [] },
+  { key: 'progress', title: '已完成', fields: [] },
+  { key: 'risks', title: '风险与阻塞', fields: ['issue', 'impact', 'next'] },
+  { key: 'decisions', title: '待决策', fields: ['decision', 'owner', 'deadline', 'basis'] },
+] as const satisfies readonly { key: string; title: string; fields: readonly Field[] }[]
 
 export type SlideKind = (typeof SLIDES)[number]['key']
 export type BriefInput = { project: string; period: string; notes: string }
 export type Source = { id: string; text: string }
-export type Point = { text: string; sourceIds: string[]; edited?: boolean; needsReview?: boolean }
-export type Slide = { kind: SlideKind; title: string; points: Point[] }
+export type Claim = {
+  text: string
+  sourceIds: string[]
+  reviewNote?: string
+  checked?: boolean
+}
+export type Point = Claim & { field?: Field }
+export type Slide = { kind: SlideKind; title: Claim; points: Point[] }
 export type Deck = {
   input: BriefInput
   sources: Source[]
   slides: Slide[]
   origin: 'example' | 'anna'
-  usage?: { model?: string; cu?: number }
+  usage?: { model?: string; cu?: number; elapsedMs?: number }
+  incomplete?: number
 }
 
+export type Where = 'title' | number
+export type ReviewState = '待补充' | '待核实' | '已关联' | '已核对'
 export const EMPTY_INPUT: BriefInput = { project: '', period: '', notes: '' }
 
 export function splitSources(notes: string): Source[] {
@@ -35,8 +56,8 @@ export function normalizeInput(input: BriefInput): BriefInput {
   const project = input.project.trim()
   const period = input.period.trim()
   const notes = input.notes.trim()
-  if (!project) throw new Error('请先填写项目名称。')
-  if (!notes) throw new Error('请先粘贴研发笔记。')
+  if (!project) throw new Error('请填写项目名称。')
+  if (!notes) throw new Error('请粘贴研发笔记。')
   if (project.length > LIMITS.project || period.length > LIMITS.period || notes.length > LIMITS.notes) {
     throw new Error('项目名称、汇报周期或笔记超出长度限制。')
   }
@@ -49,60 +70,97 @@ export function sameInput(first: BriefInput, second: BriefInput): boolean {
     first.notes.trim() === second.notes.trim()
 }
 
-function record(value: unknown): Record<string, unknown> {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('无效的 JSON 对象')
-  return value as Record<string, unknown>
+export function sourceMap(sources: Source[]): Map<string, string> {
+  return new Map(sources.map(({ id, text }) => [id, text]))
 }
 
-function line(value: unknown, limit: number): string {
-  if (typeof value !== 'string') throw new Error('缺少文本')
-  const text = value.trim().replace(/\s+/g, ' ')
-  if (!text || text.length > limit) throw new Error('文本长度无效')
-  return text
+export const emptyClaim = (): Claim => ({ text: '', sourceIds: [] })
+
+function record(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {}
+}
+
+function numbers(text: string): Set<string> {
+  return new Set(text.normalize('NFKC').match(/[0-9]+(?:\.[0-9]+)?(?:\s*%)?/g)?.map(value => value.replace(/\s/g, '')))
+}
+
+function parseClaim(value: unknown, limit: number, sources: Map<string, string>): Claim {
+  const raw = typeof value === 'string' ? { text: value } : record(value)
+  const text = (typeof raw.text === 'string' ? raw.text : '').trim().replace(/\s+/g, ' ')
+  const supplied = Array.isArray(raw.sourceIds) ? raw.sourceIds : []
+  const sourceIds = [...new Set(supplied.filter((id): id is string => typeof id === 'string' && sources.has(id)))]
+  const claim: Claim = { text: text.length > limit ? text.slice(0, limit - 1).trimEnd() + '…' : text, sourceIds }
+  if (text.length > limit) claim.reviewNote = '原句太长，已截短。'
+  else if (supplied.some(id => typeof id !== 'string' || !sources.has(id))) claim.reviewNote = '有出处编号找不到对应的原文。'
+  else if (raw.conflicting === true) claim.reviewNote = '笔记中的记录有出入。'
+  else if (sourceIds.length) {
+    const citedNumbers = numbers(sourceIds.map(id => sources.get(id)).join('\n'))
+    if ([...numbers(text)].some(number => !citedNumbers.has(number))) claim.reviewNote = '有数字未在所引原文中找到。'
+  }
+  return claim
 }
 
 export function parseDeck(response: string, input: BriefInput, origin: Deck['origin']): Deck {
   const sources = splitSources(input.notes)
-  const knownIds = new Set(sources.map(source => source.id))
+  const lookup = sourceMap(sources)
   const fenced = response.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  try {
-    const result = record(JSON.parse(fenced ? fenced[1] : response))
-    const rawSlides = result.slides
-    if (!Array.isArray(rawSlides) || rawSlides.length !== SLIDES.length - 1) throw new Error('页数无效')
-    const contentSlides: Slide[] = SLIDES.slice(1).map((definition, index) => {
-      const rawSlide = record(rawSlides[index])
-      if (rawSlide.kind !== definition.key) throw new Error('页面顺序无效')
-      if (!Array.isArray(rawSlide.points) || !rawSlide.points.length || rawSlide.points.length > LIMITS.points) {
-        throw new Error('要点数量无效')
-      }
-      return {
-        kind: definition.key,
-        title: line(rawSlide.title, LIMITS.title),
-        points: rawSlide.points.map((value: unknown): Point => {
-          const point = record(value)
-          const suppliedIds = Array.isArray(point.sourceIds) ? point.sourceIds : []
-          const sourceIds = [...new Set(suppliedIds.filter(
-            (id): id is string => typeof id === 'string' && knownIds.has(id),
-          ))]
-          return {
-            text: line(point.text, LIMITS.point),
-            sourceIds,
-            needsReview: !sourceIds.length || suppliedIds.some(id => !knownIds.has(id)),
-          }
-        }),
-      }
-    })
-    return { input, sources, origin, slides: [{ kind: 'cover', title: input.project, points: [] }, ...contentSlides] }
-  } catch {
-    throw new Error('Anna 返回的内容格式不完整或超出页面限制。请重试，或缩短原始笔记。')
+  let parsed: Record<string, unknown> = {}
+  try { parsed = record(JSON.parse(fenced ? fenced[1] : response)) } catch { /* response may be truncated */ }
+  const rawSlides = Array.isArray(parsed.slides) ? parsed.slides.map(record) : []
+  let incomplete = 0
+  const content: Slide[] = SLIDES.slice(1).map(definition => {
+    const raw = rawSlides.find(slide => slide.kind === definition.key) ?? {}
+    const rawPoints: unknown[] = Array.isArray(raw.points) ? raw.points : []
+    const definitionFields: readonly Field[] = definition.fields
+    const title = parseClaim(raw.title, LIMITS.title, lookup)
+    const points = definitionFields.length
+      ? definitionFields.map(field => ({ ...parseClaim(rawPoints.find(point => record(point).field === field), FIELDS[field].limit, lookup), field }))
+      : rawPoints.slice(0, LIMITS.points).map(point => parseClaim(point, LIMITS.point, lookup))
+    if (!title.text || !Array.isArray(raw.points) || (!definitionFields.length && !points.some(point => point.text))) incomplete++
+    return { kind: definition.key, title, points: points.length ? points : [emptyClaim()] }
+  })
+  if (!content.some(slide => slide.title.text || slide.points.some(point => point.text))) {
+    throw new Error('这次没有整理出可用的内容。可以缩短笔记后重试。')
+  }
+  return {
+    input, sources, origin, incomplete,
+    slides: [{ kind: 'cover', title: { text: input.project, sourceIds: [] }, points: [] }, ...content],
   }
 }
 
-export function pointStatus(point: Point): '已编辑' | '待核实' | '有出处' {
-  if (point.needsReview || !point.sourceIds.length) return '待核实'
-  return point.edited ? '已编辑' : '有出处'
+export function statusOf(claim: Claim): ReviewState {
+  if (!claim.text.trim()) return '待补充'
+  if (claim.checked && claim.sourceIds.length) return '已核对'
+  if (claim.reviewNote || !claim.sourceIds.length) return '待核实'
+  return '已关联'
 }
 
-export function sourceMap(sources: Source[]): Map<string, string> {
-  return new Map(sources.map(({ id, text }) => [id, text]))
+export function updateClaim(claim: Claim, changes: Pick<Claim, 'text'> | Pick<Claim, 'sourceIds'>): Claim {
+  return { ...claim, ...changes, checked: false, reviewNote: '文字或出处已修改，请重新核对。' }
+}
+
+export function labelForPoint(point: Point, index: number): string {
+  return point.field ? FIELDS[point.field].label : `要点 ${index + 1}`
+}
+
+export function claimAt(slide: Slide, where: Where): Claim | undefined {
+  return where === 'title' ? slide.title : slide.points[where]
+}
+
+export function reviewSummary(slides: Slide[]) {
+  let pending = 0
+  let missing = 0
+  let linked = 0
+  let checked = 0
+  for (const slide of slides) {
+    if (slide.kind === 'cover') continue
+    for (const claim of [slide.title, ...slide.points]) {
+      const status = statusOf(claim)
+      if (status === '待核实') pending++
+      if (status === '待补充') missing++
+      if (status === '已关联') linked++
+      if (status === '已核对') checked++
+    }
+  }
+  return { pending, missing, linked, checked }
 }

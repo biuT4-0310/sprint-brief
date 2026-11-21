@@ -3,55 +3,59 @@ import type { BriefInput } from './deck.ts'
 
 export const EXAMPLE_INPUT: BriefInput = {
   project: '订单台 2.0',
-  period: '11 月 16 日 — 11 月 20 日',
+  period: '11 月 16 日到 11 月 20 日',
   notes: [
-    '订单列表分页已合入主分支，覆盖按时间、订单状态筛选。',
-    '补齐了筛选条件回归用例，已由 QA 在测试环境跑完。',
-    '压测时发现导出偶发超时，目前还没有定位原因。',
-    '周五计划发版，请负责人决定是否先关闭导出入口。',
-    '下一步补抓导出链路的日志，记录慢请求和任务排队情况。',
-    '若决定暂关入口，发布前由前端补齐用户提示。',
+    '订单列表分页已合入主分支，可以按时间和订单状态筛选。',
+    'QA 已在测试环境跑完筛选回归。',
+    '周一记录：加了索引，导出超时工单已关闭。',
+    '周四回归仍碰到偶发的导出超时，发生频率和影响范围还没有统计。',
+    '周五计划发版。发版前要定是否先关导出入口，拍板人还没确认。',
+    '发版前补看慢请求和任务排队日志，确认是不是同一个问题。',
+    '如果决定暂关入口，前端要先补一条用户提示。',
   ].join('\n'),
 }
 
-const result = {
+export const EXAMPLE_RESPONSE = {
   slides: [
     {
       kind: 'summary',
-      title: '订单列表已就绪，导出仍待决策',
+      title: { text: '分页已合入，导出还要再查', sourceIds: ['S01', 'S03', 'S04'] },
       points: [
-        { text: '订单列表分页已合入主分支，筛选回归已完成。', sourceIds: ['S01', 'S02'] },
-        { text: '导出压测发现偶发超时，原因待定位。', sourceIds: ['S03'] },
-        { text: '周五发版前需确认是否暂时关闭导出入口。', sourceIds: ['S04'] },
+        { text: '订单列表分页已合入，筛选回归已跑完。', sourceIds: ['S01', 'S02'] },
+        { text: '周一关闭了超时工单，周四回归仍有偶发超时。', sourceIds: ['S03', 'S04'], conflicting: true },
+        { text: '周五发版前要定是否先关导出入口。', sourceIds: ['S05'] },
       ],
     },
     {
       kind: 'progress',
-      title: '分页功能合入，筛选回归完成',
+      title: { text: '分页已合入，筛选回归已跑完', sourceIds: ['S01', 'S02'] },
       points: [
-        { text: '订单列表分页已合入主分支，支持按时间和订单状态筛选。', sourceIds: ['S01'] },
-        { text: '筛选条件回归用例已补齐，QA 已在测试环境完成回归。', sourceIds: ['S02'] },
+        { text: '订单列表可按时间和订单状态筛选。', sourceIds: ['S01'] },
+        { text: 'QA 已在测试环境跑完筛选回归。', sourceIds: ['S02'] },
       ],
     },
     {
       kind: 'risks',
-      title: '导出偶发超时，根因仍待定位',
+      title: { text: '导出超时关单后又出现', sourceIds: ['S03', 'S04'], conflicting: true },
       points: [
-        { text: '压测中发现导出偶发超时，现有记录尚未给出原因。', sourceIds: ['S03'] },
-        { text: '补抓导出日志，重点检查慢请求和任务排队情况。', sourceIds: ['S05'] },
+        { field: 'issue', text: '周一关单，周四回归仍碰到偶发超时。', sourceIds: ['S03', 'S04'], conflicting: true },
+        { field: 'impact', text: '发生频率和影响范围还没有统计。', sourceIds: ['S04'] },
+        { field: 'next', text: '查慢请求和排队日志，确认是不是同一个问题。', sourceIds: ['S06'] },
       ],
     },
     {
       kind: 'decisions',
-      title: '发版前确认是否暂关导出入口',
+      title: { text: '周五发版前先定导出入口', sourceIds: ['S05'] },
       points: [
-        { text: '由负责人决定周五发版时是否保留导出入口。', sourceIds: ['S04'] },
-        { text: '如决定暂关，前端在发布前补齐用户提示。', sourceIds: ['S06'] },
+        { field: 'decision', text: '周五上线时，导出入口保留还是暂时关闭？', sourceIds: ['S05'] },
+        { field: 'owner', text: null, sourceIds: ['S05'] },
+        { field: 'deadline', text: '周五发版前', sourceIds: ['S05'] },
+        { field: 'basis', text: '超时仍会复现。如果暂关，发布前要给用户加提示。', sourceIds: ['S04', 'S07'] },
       ],
     },
   ],
 }
 
 export function exampleDeck() {
-  return parseDeck(JSON.stringify(result), { ...EXAMPLE_INPUT }, 'example')
+  return parseDeck(JSON.stringify(EXAMPLE_RESPONSE), { ...EXAMPLE_INPUT }, 'example')
 }
