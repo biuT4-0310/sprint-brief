@@ -128,15 +128,23 @@ export function parseDeck(response: string, input: BriefInput, origin: Deck['ori
 function readSlides(response: string): unknown[] {
   const fenced = [...response.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map(match => match[1])
   const candidates = [response, ...fenced]
-  for (const { index } of response.matchAll(/\{\s*"slides"\s*:/g)) {
+  for (const { index } of response.matchAll(/\{\s*"(?:slides|summary|progress|risks|decisions)"\s*:/g)) {
     const end = objectEnd(response, index)
     if (end !== -1) candidates.push(response.slice(index, end + 1))
   }
   for (const candidate of candidates) {
     try {
       const value: unknown = JSON.parse(candidate.trim())
-      const slides = Array.isArray(value) ? value : record(value).slides
-      if (Array.isArray(slides) && slides.some(slide => SLIDES.slice(1).some(definition => definition.key === record(slide).kind))) return slides
+      const envelope = record(value)
+      const slides = Array.isArray(value) ? value : Array.isArray(envelope.slides) ? [...envelope.slides] : []
+      for (const { key } of SLIDES.slice(1)) {
+        const group = envelope[key]
+        for (const item of Array.isArray(group) ? group : [group]) {
+          const slide = record(item)
+          if (Object.keys(slide).length && (slide.kind === key || slide.kind === undefined)) slides.push({ ...slide, kind: key })
+        }
+      }
+      if (slides.some(slide => SLIDES.slice(1).some(definition => definition.key === record(slide).kind))) return slides
     } catch { /* try the next candidate */ }
   }
   return []

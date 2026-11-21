@@ -1,4 +1,4 @@
-import { FIELDS, LIMITS, normalizeInput, parseDeck, splitSources } from './deck.ts'
+import { FIELDS, LIMITS, SLIDES, normalizeInput, parseDeck, splitSources } from './deck.ts'
 import type { BriefInput } from './deck.ts'
 
 type CompletionRequest = {
@@ -37,11 +37,16 @@ export async function connectAnna(): Promise<AnnaRuntime> {
 export function makeRequest(input: BriefInput): CompletionRequest {
   const payload = { project: input.project, period: input.period, sources: splitSources(input.notes) }
   const fields = Object.entries(FIELDS).map(([key, field]) => `${key}（${field.label}，最多 ${field.limit} 字）`).join('、')
+  const blank = { text: null, sourceIds: [] }
+  const template = { slides: SLIDES.slice(1).map(({ key, fields }) => ({
+    kind: key, title: blank, points: fields.length ? fields.map(field => ({ field, ...blank })) : [blank],
+  })) }
   const text = [
     '把研发笔记整理成给技术负责人看的中文周报。保留笔记里的具体工作、时间、判断和未知项。写短句，像团队里的人汇报进度，避免口号。',
-    '只返回 JSON，结构是 {"slides":[{"kind":"summary","title":{"text":"分页已合入","sourceIds":["S01"]},"points":[{"text":"…","sourceIds":["S01"]}]}]}。',
+    '填下面的 JSON 模板。顶层唯一的键是 slides，四页都放进这个数组。保留 kind 和 field 的值。',
+    JSON.stringify(template),
     `按 summary、progress、risks、decisions 顺序返回四页。封面由程序生成。标题最多 ${LIMITS.title} 字，summary 和 progress 各 1 到 ${LIMITS.points} 个要点，每条最多 ${LIMITS.point} 字。`,
-    `risks 使用 issue、impact、next 三个字段。decisions 使用 decision、owner、deadline、basis 四个字段。每个字段对应 points 中一个对象，形如 {"field":"owner","text":null,"sourceIds":[]}。字段含义：${fields}。`,
+    `risks 和 decisions 的 points 按模板填写，每个 field 对应一个对象。字段含义：${fields}。`,
     '每个标题和要点都要列出真正支持它的原文编号。没有素材时把对应 text 设为 null。如果原文明确写了未知，可以带上该编号。不要编造数字、日期、人名、负责人或决策。计划、已完成、待确认要分清。',
     '同一问题的记录有冲突时，把时间和两条记录并列写清楚，引用两个来源并附 "conflicting":true。别自行认定哪条为真。',
     'progress 页只写已经完成的事。开头直接输出 JSON 对象，结尾停在对象闭合处。',

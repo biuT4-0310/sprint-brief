@@ -69,6 +69,15 @@ test('Anna output with surrounding prose or a top-level slide array stays usable
   }
 })
 
+test('staging-style grouped page keys recover the remaining pages after the slides array', () => {
+  const [summary, progress, risks, decisions] = EXAMPLE_RESPONSE.slides
+  const raw = { slides: [summary], progress: [progress], risks: [risks], decisions: [decisions] }
+  const deck = parseDeck(JSON.stringify(raw) + ']}', EXAMPLE_INPUT, 'anna')
+  assert.equal(deck.incomplete, 0)
+  assert.deepEqual(deck.slides[3].points[0].sourceIds, ['S03', 'S04'])
+  assert.equal(deck.slides[4].points[1].text, '')
+})
+
 test('generation sends one Anna request, records usage and does not retry failures', async () => {
   const requests: unknown[] = []
   const runtime = { llm: { async complete(request: unknown) {
