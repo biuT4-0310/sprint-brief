@@ -1,0 +1,30 @@
+{
+  "name": "sprint-brief",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": { "node": ">=22.18.0" },
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc --noEmit && vite build",
+    "test": "node --disable-warning=ExperimentalWarning --test tests/*.test.ts",
+    "test:browser": "node --disable-warning=ExperimentalWarning --test tests/browser.e2e.mjs",
+    "validate": "anna-app validate --strict",
+    "dev:anna": "anna-app dev --slug sprint-brief --mock-llm tests/fixtures/anna-mock.jsonl"
+  },
+  "dependencies": {
+    "lucide-react": "^0.563.0",
+    "pptxgenjs": "4.0.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0"
+  },
+  "devDependencies": {
+    "@anna-ai/cli": "0.1.64",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "jszip": "^3.10.1",
+    "playwright-core": "1.65.1",
+    "typescript": "^5.9.3",
+    "vite": "8.3.8"
+  }
+}

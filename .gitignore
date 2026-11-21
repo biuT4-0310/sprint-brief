@@ -1,0 +1,7 @@
+node_modules/
+bundle/
+test-output/
+.env*
+.anna-app/
+.anna/
+*.local
