@@ -103,10 +103,7 @@ function parseClaim(value: unknown, limit: number, sources: Map<string, string>)
 export function parseDeck(response: string, input: BriefInput, origin: Deck['origin']): Deck {
   const sources = splitSources(input.notes)
   const lookup = sourceMap(sources)
-  const fenced = response.trim().match(/^```(?:json)?\s*([\s\S]*?)\s*```$/i)
-  let parsed: Record<string, unknown> = {}
-  try { parsed = record(JSON.parse(fenced ? fenced[1] : response)) } catch { /* response may be truncated */ }
-  const rawSlides = Array.isArray(parsed.slides) ? parsed.slides.map(record) : []
+  const rawSlides = readSlides(response).map(record)
   let incomplete = 0
   const content: Slide[] = SLIDES.slice(1).map(definition => {
     const raw = rawSlides.find(slide => slide.kind === definition.key) ?? {}
@@ -120,12 +117,43 @@ export function parseDeck(response: string, input: BriefInput, origin: Deck['ori
     return { kind: definition.key, title, points: points.length ? points : [emptyClaim()] }
   })
   if (!content.some(slide => slide.title.text || slide.points.some(point => point.text))) {
-    throw new Error('这次没有整理出可用的内容。可以缩短笔记后重试。')
+    throw new Error('Anna 返回的内容无法整理成草稿。已有草稿已保留，可以重试。')
   }
   return {
     input, sources, origin, incomplete,
     slides: [{ kind: 'cover', title: { text: input.project, sourceIds: [] }, points: [] }, ...content],
   }
+}
+
+function readSlides(response: string): unknown[] {
+  const fenced = [...response.matchAll(/```(?:json)?\s*([\s\S]*?)```/gi)].map(match => match[1])
+  const candidates = [response, ...fenced]
+  for (const { index } of response.matchAll(/\{\s*"slides"\s*:/g)) {
+    const end = objectEnd(response, index)
+    if (end !== -1) candidates.push(response.slice(index, end + 1))
+  }
+  for (const candidate of candidates) {
+    try {
+      const value: unknown = JSON.parse(candidate.trim())
+      const slides = Array.isArray(value) ? value : record(value).slides
+      if (Array.isArray(slides) && slides.some(slide => SLIDES.slice(1).some(definition => definition.key === record(slide).kind))) return slides
+    } catch { /* try the next candidate */ }
+  }
+  return []
+}
+
+function objectEnd(text: string, start: number): number {
+  let depth = 0
+  let quoted = false
+  for (let index = start; index < text.length; index++) {
+    const character = text[index]
+    if (quoted && character === '\\') { index++; continue }
+    if (character === '"') { quoted = !quoted; continue }
+    if (quoted) continue
+    if (character === '{') depth++
+    if (character === '}' && --depth === 0) return index
+  }
+  return -1
 }
 
 export function statusOf(claim: Claim): ReviewState {

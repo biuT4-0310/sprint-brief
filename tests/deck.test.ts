@@ -52,7 +52,21 @@ test('partial JSON keeps usable slides and editing invalidates a manual check', 
   const loose = parseDeck('{"slides":[{"kind":"summary","title":"完成回归","points":["测试环境已跑完"]}]}', EXAMPLE_INPUT, 'anna')
   assert.equal(loose.slides[1].points[0].text, '测试环境已跑完')
   assert.equal(statusOf(loose.slides[1].title), '待核实')
-  assert.throws(() => parseDeck('{"slides":[]}', EXAMPLE_INPUT, 'anna'), /可用的内容/)
+  assert.throws(() => parseDeck('{"slides":[]}', EXAMPLE_INPUT, 'anna'), /无法整理成草稿/)
+})
+
+test('Anna output with surrounding prose or a top-level slide array stays usable', () => {
+  const response = JSON.stringify(EXAMPLE_RESPONSE)
+  for (const input of [
+    '以下是这周的周报。\n```json\n' + response + '\n```\n希望能帮到你。',
+    '前置说明 {草稿} ' + response + ' 还有后续文字 {完成}',
+    '\uFEFF' + response,
+    JSON.stringify(EXAMPLE_RESPONSE.slides),
+  ]) {
+    const deck = parseDeck(input, EXAMPLE_INPUT, 'anna')
+    assert.deepEqual(deck.slides[3].points[0].sourceIds, ['S03', 'S04'])
+    assert.equal(statusOf(deck.slides[4].points[1]), '待补充')
+  }
 })
 
 test('generation sends one Anna request, records usage and does not retry failures', async () => {
