@@ -2,6 +2,7 @@
   "name": "进展成页 · Sprint Brief",
   "slug": "sprint-brief",
   "category": "productivity",
+  "logo_file": "branding/app-icon.png",
   "tagline": "把研发笔记整理成周报 PPT，开会前还能逐条核对原文。",
   "description": "粘贴任务记录或会议笔记，用 Anna 起草五页周报。单独列出风险和待决策事项，核对原文后导出可编辑的 PowerPoint。"
 }
